@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="author" content="Fzyz LSY" />
+  <title>AI 辩论 · 人机对辩</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ============ 一、设置页 ============ -->
+    <section id="screen-setup" class="screen active">
+      <header class="hero">
+        <h1>⚔️ AI 辩论</h1>
+        <p class="sub">与 DeepSeek 进行一场完整赛制的辩论对抗</p>
+      </header>
+
+      <div class="card">
+        <h2>开始前设置</h2>
+
+        <label class="field">
+          <span>DeepSeek API Key</span>
+          <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
+          <small>密钥仅保存在你本机浏览器（localStorage），只发往 api.deepseek.com。</small>
+        </label>
+
+        <label class="field">
+          <span>思考强度（reasoning_effort）</span>
+          <select id="effort">
+            <option value="high" selected>high（常规，推荐）</option>
+            <option value="max">max（更深思考，更慢）</option>
+            <option value="low">low（更快，较浅）</option>
+          </select>
+          <small>宏观战略阶段始终使用 max 深度思考。</small>
+        </label>
+
+        <label class="field">
+          <span>辩题</span>
+          <textarea id="topic" rows="2" placeholder="例如：人工智能的发展对人类利大于弊"></textarea>
+        </label>
+
+        <label class="field">
+          <span>你的持方（AI 将持相反持方）</span>
+          <div class="radio-row">
+            <label class="radio"><input type="radio" name="side" value="正方" checked /><span>正方</span></label>
+            <label class="radio"><input type="radio" name="side" value="反方" /><span>反方</span></label>
+          </div>
+        </label>
+
+        <div id="setupError" class="error-box" hidden></div>
+
+        <div class="btn-row">
+          <button id="btnStart" class="btn primary">开始（先生成 AI 宏观战略）</button>
+          <button id="btnOpenSettings" class="btn ghost" type="button">高级设置</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 高级设置页 ============ -->
+    <section id="screen-settings" class="screen">
+      <div class="card">
+        <h2>⚙️ 高级设置</h2>
+        <p class="status">调整赛制与流程参数，保存后立即生效并存入本机浏览器。</p>
+
+        <h3>自定义赛制</h3>
+        <p class="status small">按比赛顺序编辑环节：可增删、排序，并修改类型 / 持方 / 辩位 / 时长 / 最大字数。</p>
+        <div id="formatEditor" class="format-editor"></div>
+        <button id="btnAddStage" class="btn ghost small" type="button">＋ 添加环节</button>
+
+        <h3>质询</h3>
+        <div class="settings-row">
+          <span class="settings-name">问答回合数</span>
+          <input id="setCrossRounds" type="number" min="1" step="1" />
+        </div>
+
+        <h3>自由辩论</h3>
+        <div class="settings-row">
+          <span class="settings-name">每方总字数预算</span>
+          <input id="setFreeBudget" type="number" min="1" step="1" />
+        </div>
+        <div class="settings-row">
+          <span class="settings-name">总回合数上限</span>
+          <input id="setFreeTurns" type="number" min="1" step="1" />
+        </div>
+
+        <div id="settingsError" class="error-box" hidden></div>
+        <div class="btn-row">
+          <button id="btnSettingsSave" class="btn primary" type="button">保存并返回</button>
+          <button id="btnSettingsReset" class="btn ghost" type="button">恢复默认</button>
+          <button id="btnSettingsBack" class="btn ghost" type="button">取消</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 二、战略生成页 ============ -->
+    <section id="screen-strategy" class="screen">
+      <div class="card">
+        <h2>🧠 生成 AI 宏观战略</h2>
+        <p id="strategyStatus" class="status">正在深度思考整场辩论的战略……</p>
+
+        <div class="strategy-toggle">
+          <button id="btnViewStrategy" class="btn ghost" type="button">查看 AI 宏观战略（调试用）</button>
+        </div>
+        <div id="strategyDetails" class="strategy-box" hidden>
+          <div id="strategyBody" class="mono"></div>
+        </div>
+
+        <details id="strategyThinking" class="think-debug" hidden>
+          <summary>💭 思考过程（流式调试）</summary>
+          <div id="strategyThinkingBody" class="think-body"></div>
+        </details>
+
+        <button id="btnRetryStrategy" class="btn ghost" type="button" hidden>重试战略生成</button>
+        <button id="btnEnterDebate" class="btn primary" type="button" hidden>进入辩论 →</button>
+      </div>
+    </section>
+
+    <!-- ============ 三、辩论页 ============ -->
+    <section id="screen-debate" class="screen">
+      <div class="debate-top">
+        <div class="debate-meta">
+          <div class="topic-line"><span class="tag">辩题</span><span id="debateTopic"></span></div>
+          <div class="side-line"><span class="tag">你的持方</span><span id="debateSide"></span></div>
+        </div>
+        <div class="stage-line" id="stageLine" role="button" tabindex="0" title="点击查看完整流程">
+          <span id="stageProgress" class="tag"></span>
+          <strong id="stageName"></strong>
+          <span id="stageLimit" class="muted"></span>
+          <span class="caret">▾</span>
+        </div>
+        <div id="stageListPanel" class="stage-list" hidden></div>
+        <div class="top-actions">
+          <label class="chk-think"><input type="checkbox" id="chkThinking" /> 显示 AI 思考（调试）</label>
+          <button id="btnViewStrategyDebate" class="btn ghost small" type="button">AI 战略</button>
+          <button id="btnRestart" class="btn ghost small" type="button">重新开始</button>
+        </div>
+      </div>
+
+      <div id="strategyPanelDebate" class="strategy-box" hidden></div>
+
+      <div id="transcript" class="transcript"></div>
+
+      <div id="status" class="status-bar"></div>
+
+      <div id="inputArea" class="input-area">
+        <div class="input-head">
+          <span id="inputLabel"></span>
+          <span id="inputCounter" class="muted"></span>
+        </div>
+        <textarea id="input" rows="3" placeholder="在此输入你的发言……"></textarea>
+        <div class="input-actions">
+          <button id="btnSubmit" class="btn primary" type="button">提交发言</button>
+          <button id="btnEndStage" class="btn ghost" type="button" hidden>结束本环节</button>
+          <button id="btnRetryAI" class="btn ghost" type="button" hidden>重试</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 四、评委裁决页 ============ -->
+    <section id="screen-judge" class="screen">
+      <div class="card">
+        <h2>🏆 评委裁决</h2>
+        <p id="judgeStatus" class="status">评委正在复盘整场辩论……</p>
+        <div id="verdictBox" class="verdict mono"></div>
+        <details id="verdictThinking" class="think-debug" hidden>
+          <summary>💭 思考过程（流式调试）</summary>
+          <div id="verdictThinkingBody" class="think-body"></div>
+        </details>
+        <div class="judge-actions">
+          <button id="btnExport" class="btn ghost" type="button">导出辩论记录（Markdown）</button>
+          <button id="btnAgain" class="btn primary" type="button">再来一场</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="credit">创作者：Fzyz LSY</footer>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="prompts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
