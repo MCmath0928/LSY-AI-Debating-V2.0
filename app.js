@@ -34,6 +34,7 @@
     busy: false,
     pendingHuman: null,      // { max, label, onDone, endable }
     pendingRetry: null,      // 失败后重试回调
+    undoSnap: null,          // 上一回合快照（质询/自由辩论，用于"编辑上一条"）
   };
 
   let draftFormat = null; // 高级设置页中正在编辑的赛制草稿
@@ -71,6 +72,7 @@
       inputCounter: $("inputCounter"), submit: $("btnSubmit"), endStage: $("btnEndStage"),
       retry: $("btnRetryAI"), strategyPanel: $("strategyPanelDebate"), strategyBtn: $("btnViewStrategyDebate"),
       chkThinking: $("chkThinking"), restart: $("btnRestart"),
+      reminder: $("roundReminder"), editLast: $("btnEditLast"),
     },
     judge: {
       status: $("judgeStatus"), verdict: $("verdictBox"),
@@ -337,6 +339,67 @@
 
   function setStatus(text) { el.debate.status.textContent = text || ""; }
 
+  /* ---------------- 最后一回合提醒 + 编辑上一回合 ---------------- */
+  function setRoundReminder(msg) {
+    el.debate.reminder.textContent = msg || "";
+    el.debate.reminder.hidden = !msg;
+  }
+  function showEditLast(on) {
+    el.debate.editLast.hidden = !on;
+  }
+  function renderAllBubbles() {
+    el.debate.transcript.textContent = "";
+    state.transcript.forEach((e) => {
+      const cls = e.side === "评委" ? "judge" : (e.by === "human" ? "human" : "ai");
+      addBubble(e.display || e.label, e.text, cls, false);
+    });
+  }
+  function cloneCx(cx) { return cx ? { exchange: cx.exchange, phase: cx.phase } : null; }
+  function cloneFree(f) { return f ? { turn: f.turn, proUsed: f.proUsed, conUsed: f.conUsed, turnCount: f.turnCount } : null; }
+  function roundReminder(stage) {
+    if (stage.kind === "crossExam") {
+      if (state.cx && state.cx.exchange >= state.adv.crossExamRounds - 1) {
+        return "⚠️ 质询最后一回合：请完成「下结论定性」收尾。";
+      }
+      return null;
+    }
+    if (stage.kind === "freeDebate") {
+      const f = state.free;
+      if (!f) return null;
+      if (f.turnCount >= state.adv.freeDebateMaxTurns - 1) {
+        return "⚠️ 自由辩论接近回合上限：这是最后的发言机会。";
+      }
+      const budget = state.adv.freeDebateBudget;
+      const used = f.turn === "正方" ? f.proUsed : f.conUsed;
+      if (budget - used <= stageLimit(stage)) {
+        return "⚠️ " + f.turn + "字数预算将尽：这是" + f.turn + "最后的发言机会。";
+      }
+      return null;
+    }
+    return null;
+  }
+  function onEditLast() {
+    const snap = state.undoSnap;
+    if (!snap) return;
+    state.undoSnap = null;
+    const removed = state.transcript.splice(snap.transcriptLength);
+    const humanEntry = removed.find((e) => e.by === "human") || removed[0];
+    const oldText = humanEntry ? humanEntry.text : "";
+    state.stageIndex = snap.stageIndex;
+    state.cx = cloneCx(snap.cx);
+    state.free = cloneFree(snap.free);
+    state.judgeQ = null;
+    state.pendingHuman = null;
+    state.busy = false;
+    renderAllBubbles();
+    advance();
+    if (state.pendingHuman) {
+      el.debate.input.value = oldText;
+      updateCounter();
+      setStatus("已回到上一回合，编辑后重新提交即可。");
+    }
+  }
+
   /* ---------------- 思考进度指示 + 调试流 ---------------- */
   // 返回 { onReasoning, onOutput, stop }：实时显示"思考/输出"进度与用时
   function startProgress(setter) {
@@ -430,6 +493,7 @@
   /* ---------------- 输入框控制 ---------------- */
   function showInput(on) {
     el.debate.inputArea.style.display = on ? "flex" : "none";
+    if (!on) el.debate.editLast.hidden = true;
   }
   function setInputConfig(label, max) {
     el.debate.inputLabel.textContent = label;
@@ -456,8 +520,8 @@
   function showRetry() { el.debate.retry.hidden = false; el.debate.retry.disabled = false; }
 
   /* ---------------- 记录 ---------------- */
-  function pushTranscript(label, side, text, by) {
-    state.transcript.push({ label: label, side: side, text: text, by: by });
+  function pushTranscript(label, side, text, by, display) {
+    state.transcript.push({ label: label, side: side, text: text, by: by, display: display || label });
   }
   function transcriptText() {
     if (!state.transcript.length) return "（暂无）";
@@ -472,6 +536,7 @@
     disableInput();
     hideEndButton();
     showInput(false);
+    showEditLast(false);
     const progress = startProgress(setStatus);
     const bubble = addBubble("AI · " + opts.label, "", "ai", true);
     const debug = state.showThinking ? makeDebugDetails(bubble.wrap) : null;
@@ -490,7 +555,7 @@
       progress.stop();
       if (!content.trim()) throw new Error("模型返回了空回复（可能思考过长导致预算耗尽，请重试）");
       setBubbleText(bubble, content);
-      pushTranscript(opts.label, opts.side, content, "ai");
+      pushTranscript(opts.label, opts.side, content, "ai", "AI · " + opts.label);
       state.busy = false;
       setStatus("");
       opts.onDone(content);
@@ -507,6 +572,7 @@
   /* ================= 流程控制 ================= */
   function advance() {
     if (state.busy) return;
+    setRoundReminder(null);
     if (state.stageIndex >= state.format.length) { finishDebate(); return; }
     updateStageHeader();
     const stage = state.format[state.stageIndex];
@@ -566,6 +632,7 @@
     if (!state.cx) state.cx = { exchange: 0, phase: "question" };
     const charLimit = stageLimit(stage);
     const q = stage.questioner, a = stage.answerer;
+    setRoundReminder(roundReminder(stage));
 
     if (state.cx.phase === "question") {
       if (q.side === state.humanSide) {
@@ -658,8 +725,8 @@
         setBubbleText(bubble, content);
         const qs = parseJudgeQuestions(content);
         // 将两个问题作为评委发言写入实录
-        pushTranscript("评委·提问（正方）", "评委", qs["正方"], "ai");
-        pushTranscript("评委·提问（反方）", "评委", qs["反方"], "ai");
+        pushTranscript("评委·提问（正方）", "评委", qs["正方"], "ai", "评委 · 提问（正方）");
+        pushTranscript("评委·提问（反方）", "评委", qs["反方"], "ai", "评委 · 提问（反方）");
         state.judgeQ.questions = qs;
         state.judgeQ.step = 1;
         state.busy = false;
@@ -745,6 +812,7 @@
     const side = f.turn;
     const used = side === "正方" ? f.proUsed : f.conUsed;
     const budgetInfo = side + "已用 " + used + "/" + budget + " 字";
+    setRoundReminder(roundReminder(stage));
 
     if (side === state.humanSide) {
       waitForHuman({
@@ -795,6 +863,9 @@
     hideRetry();
     setInputConfig(opts.label, opts.max);
     if (opts.endable) showEndButton(); else hideEndButton();
+    const stage = state.format[state.stageIndex];
+    const editable = stage && (stage.kind === "crossExam" || stage.kind === "freeDebate") && state.undoSnap != null;
+    showEditLast(editable);
     setStatus(opts.hint || ("轮到你发言：" + opts.label));
   }
 
@@ -804,7 +875,16 @@
     const text = el.debate.input.value.trim();
     if (!text) { setStatus("请输入内容后再提交。"); return; }
     if (len(text) > p.max) { setStatus("字数超限：" + len(text) + " / " + p.max + " 字，请删减。"); return; }
-    pushTranscript(p.recordLabel, state.humanSide, text, "human");
+    const stage = state.format[state.stageIndex];
+    if (stage && (stage.kind === "crossExam" || stage.kind === "freeDebate")) {
+      state.undoSnap = {
+        stageIndex: state.stageIndex,
+        transcriptLength: state.transcript.length,
+        cx: cloneCx(state.cx),
+        free: cloneFree(state.free),
+      };
+    }
+    pushTranscript(p.recordLabel, state.humanSide, text, "human", p.label);
     addBubble(p.label, text, "human");
     el.debate.input.value = "";
     updateCounter();
@@ -1158,6 +1238,7 @@
     el.strategy.retryBtn.addEventListener("click", generateStrategy);
 
     el.debate.submit.addEventListener("click", onHumanSubmit);
+    el.debate.editLast.addEventListener("click", onEditLast);
     el.debate.input.addEventListener("input", updateCounter);
     el.debate.input.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") onHumanSubmit();
